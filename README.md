@@ -22,11 +22,19 @@
 
 ## 🚀 Quick Start
 
+**1. Clone the repository:**
+```bash
+git clone https://github.com/mapy1874/youtube-playlist-transcriber.git
+cd youtube-playlist-transcriber
+```
+
+**2. Install dependencies and start:**
 ```bash
 npm install
 npm start
 ```
 
+**3. Open in your browser:**
 Visit `http://localhost:3000` and paste either:
 - **Single video URL**: `https://youtube.com/watch?v=...`
 - **Playlist URL**: `https://youtube.com/playlist?list=...`
