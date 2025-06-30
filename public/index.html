@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YouTube Transcript Fetcher</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* small utility for scrollbar */
+      .scrollbar-thin::-webkit-scrollbar{height:6px;width:6px} .scrollbar-thin::-webkit-scrollbar-track{background:transparent} .scrollbar-thin::-webkit-scrollbar-thumb{background:#c4c4c4;border-radius:3px}
+      
+      /* Notification styles */
+      .notification {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        min-width: 300px;
+        max-width: 400px;
+        padding: 16px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transform: translateX(100%);
+        transition: transform 0.3s ease-in-out;
+        z-index: 1000;
+        font-size: 14px;
+      }
+      
+      .notification.show {
+        transform: translateX(0);
+      }
+      
+      .notification.success {
+        background: #10b981;
+        color: white;
+      }
+      
+      .notification.error {
+        background: #ef4444;
+        color: white;
+      }
+      
+      .notification.info {
+        background: #3b82f6;
+        color: white;
+      }
+      
+      .notification-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      
+      .notification-title {
+        font-weight: 600;
+        font-size: 16px;
+      }
+      
+      .notification-close {
+        background: none;
+        border: none;
+        color: currentColor;
+        cursor: pointer;
+        padding: 0;
+        font-size: 18px;
+        opacity: 0.8;
+      }
+      
+      .notification-close:hover {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container mx-auto p-6">
+      <h1 class="text-2xl font-bold mb-2">YouTube Transcript Fetcher</h1>
+      <p class="text-gray-600 mb-4">Enter a YouTube video or playlist URL below.</p>
+      <div class="flex gap-2 mb-4">
+        <input id="urlInput" type="text" placeholder="https://www.youtube.com/watch?v=..." class="flex-1 border rounded px-3 py-2" />
+        <button id="fetchBtn" class="bg-blue-600 text-white px-4 py-2 rounded">Fetch</button>
+      </div>
+      <div class="flex gap-2 mb-6">
+        <button id="downloadBtn" disabled class="bg-green-600 text-white px-3 py-1 rounded opacity-60">Download Session</button>
+        <button id="clearBtn" class="bg-red-500 text-white px-3 py-1 rounded">Clear</button>
+      </div>
+
+      <h2 class="font-semibold mb-2">Logs</h2>
+      <div class="relative">
+        <pre id="logBox" class="bg-gray-100 p-3 max-h-48 overflow-y-auto scrollbar-thin text-sm"></pre>
+        <button id="logsToggle" class="absolute bottom-0 right-0 bg-white bg-opacity-80 text-blue-600 text-xs px-2 py-0.5 hidden">Expand</button>
+      </div>
+
+      <div class="flex justify-between items-center mt-6 mb-4">
+        <h2 class="font-semibold">Transcripts</h2>
+        <div class="flex gap-2 items-center">
+          <button id="expandAllBtn" class="text-blue-600 text-sm px-2 py-1 border border-blue-600 rounded hover:bg-blue-50">Expand All</button>
+          <button id="collapseAllBtn" class="text-blue-600 text-sm px-2 py-1 border border-blue-600 rounded hover:bg-blue-50">Collapse All</button>
+          <div class="border-l pl-2 ml-2">
+            <label class="text-sm text-gray-600 mr-2">Format:</label>
+            <label class="inline-flex items-center">
+              <input type="radio" name="formatToggle" value="timestamp" checked class="mr-1">
+              <span class="text-sm">Timestamped</span>
+            </label>
+            <label class="inline-flex items-center ml-3">
+              <input type="radio" name="formatToggle" value="plain" class="mr-1">
+              <span class="text-sm">Plain</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div id="transcriptContainer" class="space-y-3"></div>
+      <pre id="transcriptBox" class="hidden"></pre>
+
+      <!-- Notification container -->
+      <div id="notificationContainer"></div>
+
+      <!-- Load JSZip; if it fails we will lazy‐load on demand -->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+      <script>
+        const urlInput = document.getElementById('urlInput');
+        const fetchBtn = document.getElementById('fetchBtn');
+        const transcriptContainer = document.getElementById('transcriptContainer');
+        const logBox = document.getElementById('logBox');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const logsToggle = document.getElementById('logsToggle');
+        let transcriptData = [];
+        let showTimestamps = true;
+        let playlistData = null;
+        let currentPlaylistTitle = '';
+        let currentVideoTitle = '';
+        let sessionItems = [];
+        let globalShowTimestamps = true;
+
+        // Notification system
+        function showNotification(title, message, type = 'info', duration = 5000) {
+          const container = document.getElementById('notificationContainer');
+          const notification = document.createElement('div');
+          notification.className = `notification ${type}`;
+          
+          notification.innerHTML = `
+            <div class="notification-header">
+              <div class="notification-title">${title}</div>
+              <button class="notification-close" onclick="this.parentElement.parentElement.remove()">×</button>
+            </div>
+            <div>${message}</div>
+          `;
+          
+          container.appendChild(notification);
+          
+          // Trigger animation
+          setTimeout(() => notification.classList.add('show'), 10);
+          
+          // Auto remove after duration
+          setTimeout(() => {
+            notification.classList.remove('show');
+            setTimeout(() => {
+              if (notification.parentElement) {
+                notification.remove();
+              }
+            }, 300);
+          }, duration);
+        }
+
+        function renderTimestamped() {
+          const lines = transcriptData.map(seg => `${seg.timestamp}  ${seg.text}`).join('\n');
+          transcriptContainer.innerHTML = '';
+          const section = document.createElement('div');
+          section.className = 'border rounded';
+          const header = document.createElement('div');
+          header.className = 'flex justify-between items-center bg-gray-50 px-3 py-2 cursor-pointer';
+          header.innerHTML = `<div class="flex items-center gap-2"><svg class="chev w-4 h-4 text-gray-500 transition-transform" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg><span class="font-medium text-sm">${currentVideoTitle}</span></div>`;
+          const btn = document.createElement('button');
+          btn.className = 'text-blue-600 text-xs';
+          btn.textContent = 'Copy';
+          header.appendChild(btn);
+          const body = document.createElement('pre');
+          body.className = 'px-3 py-2 hidden whitespace-pre-wrap text-sm bg-white';
+          body.textContent = lines;
+          const chev = header.querySelector('.chev');
+          header.addEventListener('click', () => {
+            body.classList.toggle('hidden');
+            chev.classList.toggle('rotate-90');
+          });
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(body.textContent);
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 1500);
+          });
+          section.appendChild(header);
+          section.appendChild(body);
+          transcriptContainer.appendChild(section);
+        }
+
+        function renderPlain() {
+          const plain = transcriptData.map(seg => seg.text).join(' ');
+          transcriptContainer.innerHTML = '';
+          const section = document.createElement('div');
+          section.className = 'border rounded';
+          const header = document.createElement('div');
+          header.className = 'flex justify-between items-center bg-gray-50 px-3 py-2 cursor-pointer';
+          header.innerHTML = `<div class="flex items-center gap-2"><svg class="chev w-4 h-4 text-gray-500 transition-transform" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg><span class="font-medium text-sm">${currentVideoTitle}</span></div>`;
+          const btn = document.createElement('button');
+          btn.className = 'text-blue-600 text-xs';
+          btn.textContent = 'Copy';
+          header.appendChild(btn);
+          const body = document.createElement('pre');
+          body.className = 'px-3 py-2 hidden whitespace-pre-wrap text-sm bg-white';
+          body.textContent = plain;
+          const chev = header.querySelector('.chev');
+          header.addEventListener('click', () => {
+            body.classList.toggle('hidden');
+            chev.classList.toggle('rotate-90');
+          });
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(body.textContent);
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 1500);
+          });
+          section.appendChild(header);
+          section.appendChild(body);
+          transcriptContainer.appendChild(section);
+        }
+
+        function updateRender() {
+          if (showTimestamps) {
+            renderTimestamped();
+          } else {
+            renderPlain();
+          }
+        }
+
+        function triggerDownload(content, filename) {
+          const blob = new Blob([content], { type: 'text/plain' });
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+
+        function downloadBoth() {
+          const videoId = (urlInput.value.match(/[?&]v=([^&]+)/) || [null, 'transcript'])[1];
+
+          // Timestamped version
+          const tsContent = transcriptData.map(seg => `${seg.timestamp}\t${seg.text}`).join('\n');
+          triggerDownload(tsContent, `${videoId}-timestamped.txt`);
+
+          // Plain text version
+          const plainContent = transcriptData.map(seg => seg.text).join(' ');
+          triggerDownload(plainContent, `${videoId}-plain.txt`);
+        }
+
+        // Helper to guarantee JSZip is loaded before using
+        function ensureJSZip() {
+          return new Promise((resolve, reject) => {
+            if (typeof JSZip !== 'undefined') return resolve(JSZip);
+            const s = document.createElement('script');
+            s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+            s.onload = () => (typeof JSZip !== 'undefined' ? resolve(JSZip) : reject(new Error('JSZip failed to load')));
+            s.onerror = () => reject(new Error('JSZip network error'));
+            document.head.appendChild(s);
+          });
+        }
+
+        function slug(str){return str.replace(/[^a-z0-9-_]/gi,'_').substring(0,60) || 'output';}
+
+        downloadBtn.addEventListener('click', () => {
+          if (!sessionItems.length) return;
+          ensureJSZip().then(() => {
+            const zip = new JSZip();
+            const timestampedFolder = zip.folder('timestamped');
+            const plainFolder = zip.folder('plain');
+            
+            sessionItems.forEach(item => {
+              item.files.forEach(f => {
+                if (f.path.startsWith('timestamped/')) {
+                  timestampedFolder.file(f.path.replace('timestamped/', ''), f.content);
+                } else if (f.path.startsWith('plain/')) {
+                  plainFolder.file(f.path.replace('plain/', ''), f.content);
+                }
+              });
+            });
+            
+            const fileName = `session-${new Date().toISOString().slice(0,10)}.zip`;
+            zip.generateAsync({ type: 'blob' }).then(blob => {
+              const link = document.createElement('a');
+              link.href = URL.createObjectURL(blob);
+              link.download = fileName;
+              link.click();
+              
+              // Count total files
+              let totalFiles = 0;
+              sessionItems.forEach(item => totalFiles += item.files.length);
+              
+              showNotification(
+                '📦 Download Ready!', 
+                `Successfully created ${fileName} with ${totalFiles} files`, 
+                'success'
+              );
+            }).catch(err => {
+              showNotification(
+                '❌ Download Failed', 
+                `Failed to create zip file: ${err.message || 'Unknown error'}`, 
+                'error'
+              );
+            });
+          });
+        });
+
+        document.getElementById('clearBtn').addEventListener('click', () => {
+          sessionItems = [];
+          setEnabled(downloadBtn, false);
+          transcriptContainer.innerHTML = '';
+          logBox.textContent = '';
+        });
+
+        // Global format toggle
+        document.querySelectorAll('input[name="formatToggle"]').forEach(radio => {
+          radio.addEventListener('change', (e) => {
+            globalShowTimestamps = e.target.value === 'timestamp';
+            updateAllTranscripts();
+          });
+        });
+
+        // Expand/Collapse all buttons
+        document.getElementById('expandAllBtn').addEventListener('click', () => {
+          document.querySelectorAll('#transcriptContainer .border pre').forEach(body => {
+            body.classList.remove('hidden');
+            body.closest('.border').querySelector('.chev').classList.add('rotate-90');
+          });
+        });
+
+        document.getElementById('collapseAllBtn').addEventListener('click', () => {
+          document.querySelectorAll('#transcriptContainer .border pre').forEach(body => {
+            body.classList.add('hidden');
+            body.closest('.border').querySelector('.chev').classList.remove('rotate-90');
+          });
+        });
+
+        function updateAllTranscripts() {
+          document.querySelectorAll('#transcriptContainer .border').forEach(section => {
+            const body = section.querySelector('pre');
+            const contentTS = section.dataset.contentTs;
+            const contentPlain = section.dataset.contentPlain;
+            if (body && contentTS && contentPlain) {
+              body.textContent = globalShowTimestamps ? contentTS : contentPlain;
+            }
+          });
+        }
+
+        function setEnabled(btn, enable){
+          if(enable){btn.disabled=false;btn.classList.remove('opacity-60');}
+          else{btn.disabled=true;btn.classList.add('opacity-60');}
+        }
+
+        function addDivider(){
+          if(transcriptContainer.childElementCount===0) return;
+          const last=transcriptContainer.lastElementChild;
+          if(last && last.classList.contains('divider')) return;
+          const div=document.createElement('div');div.className='border-t my-4 divider';transcriptContainer.appendChild(div);
+        }
+
+        fetchBtn.addEventListener('click', async () => {
+          const videoUrl = urlInput.value.trim();
+          if (!videoUrl) {
+            alert('Please enter a YouTube video URL.');
+            return;
+          }
+          addDivider();
+          logBox.textContent+='\n-- new request --\n';
+          setEnabled(downloadBtn,false);
+          setEnabled(fetchBtn,false);
+          
+          const isPlaylist = /[?&]list=/.test(videoUrl) && !videoUrl.includes('watch?v=');
+          showNotification(
+            '🚀 Starting Process', 
+            `Fetching ${isPlaylist ? 'playlist' : 'video'} transcript...`, 
+            'info', 
+            3000
+          );
+          
+          try {
+            let apiUrl;
+            if (isPlaylist) {
+              apiUrl = `/api/playlist/stream?playlistUrl=${encodeURIComponent(videoUrl)}`;
+              // Stream using EventSource
+              playlistData = [];
+              const es = new EventSource(apiUrl);
+              es.addEventListener('log', (e) => {
+                logBox.textContent += e.data + '\n';
+                if(logBox.scrollHeight>200){logsToggle.classList.remove('hidden');}
+                logBox.scrollTop = logBox.scrollHeight;
+              });
+              es.addEventListener('video', (e) => {
+                const videoObj = JSON.parse(e.data);
+                playlistData.push(videoObj);
+                if (videoObj.transcript) {
+                  const tsText = videoObj.transcript.map(s=>`${s.timestamp}  ${s.text}`).join('\n');
+                  const plainText = videoObj.transcript.map(s=>s.text).join('\n');
+                  const rootSlug = slug(currentPlaylistTitle || 'playlist');
+                  const existing = sessionItems.find(e => e.root === rootSlug);
+                  const idx = (existing ? existing.files.filter(f=>f.path.startsWith('timestamped/')).length : 0) + 1;
+                  const baseName = idx.toString().padStart(2,'0')+'-'+slug(videoObj.title||'video');
+                  transcriptContainer.appendChild(createCard(videoObj.title, tsText, plainText));
+                  addToSession(rootSlug, baseName, tsText, plainText);
+                } else {
+                  transcriptContainer.appendChild(createCard(videoObj.title + ' (NO TRANSCRIPT)', 'NO TRANSCRIPT', 'NO TRANSCRIPT'));
+                }
+              });
+              es.addEventListener('done', () => {
+                setEnabled(downloadBtn, true);
+                setEnabled(fetchBtn, true);
+                es.close();
+                const videoCount = playlistData.length;
+                const successCount = playlistData.filter(v => v.transcript).length;
+                showNotification(
+                  '🎉 Playlist Complete!', 
+                  `Successfully processed ${successCount}/${videoCount} videos from "${currentPlaylistTitle || 'playlist'}"`, 
+                  'success'
+                );
+              });
+              es.addEventListener('error', (err) => {
+                console.error(err);
+                setEnabled(fetchBtn, true);
+                es.close();
+                showNotification(
+                  '❌ Playlist Failed', 
+                  `Failed to process playlist: ${typeof err === 'string' ? err : 'Unknown error'}`, 
+                  'error'
+                );
+              });
+              es.addEventListener('meta',e=>{currentPlaylistTitle = JSON.parse(e.data).title;});
+              return; // Skip fetch fallback
+            } else {
+              apiUrl = `/api/transcript/stream?videoUrl=${encodeURIComponent(videoUrl)}`;
+              const es=new EventSource(apiUrl);
+              es.addEventListener('log',e=>{logBox.textContent+=e.data+'\n'; if(logBox.scrollHeight>200) logsToggle.classList.remove('hidden');logBox.scrollTop=logBox.scrollHeight;});
+              es.addEventListener('video',e=>{
+                 const v=JSON.parse(e.data);
+                 transcriptData=v.transcript;
+                 currentVideoTitle=v.title;
+                 const tsText=v.transcript.map(s=>`${s.timestamp}  ${s.text}`).join('\n');
+                 const plainText=v.transcript.map(s=>s.text).join('\n');
+                 const rootSlug = slug(currentPlaylistTitle || 'playlist');
+                 const existing = sessionItems.find(e => e.root === rootSlug);
+                 const idx = (existing ? existing.files.filter(f=>f.path.startsWith('timestamped/')).length : 0) + 1;
+                 const baseName = idx.toString().padStart(2,'0')+'-'+slug(v.title||'video');
+                 transcriptContainer.appendChild(createCard(v.title, tsText, plainText));
+                 addToSession(rootSlug, baseName, tsText, plainText);
+              });
+              es.addEventListener('done',()=>{
+                setEnabled(downloadBtn,true); 
+                setEnabled(fetchBtn,true); 
+                es.close();
+                showNotification(
+                  '✅ Video Complete!', 
+                  `Successfully processed "${currentVideoTitle || 'video'}"`, 
+                  'success'
+                );
+              });
+              es.addEventListener('error',err=>{
+                console.error(err); 
+                setEnabled(fetchBtn,true); 
+                es.close();
+                showNotification(
+                  '❌ Video Failed', 
+                  `Failed to process video: ${typeof err === 'string' ? err : 'Unknown error'}`, 
+                  'error'
+                );
+              });
+              return;
+            }
+          } catch(e){
+            console.error('fetch error', e);
+            setEnabled(fetchBtn,true);
+            showNotification(
+              '❌ Connection Error', 
+              `Failed to start fetch process: ${e.message || 'Unknown error'}`, 
+              'error'
+            );
+          }
+        });
+
+        logsToggle.addEventListener('click', () => {
+          const expanded = logBox.classList.toggle('max-h-48');
+          logsToggle.textContent = expanded ? 'Expand' : 'Collapse';
+        });
+
+        // helper to build card
+        function createCard(title, contentTS, contentPlain){
+          const section=document.createElement('div');
+          section.className='border rounded shadow-sm hover:shadow-md transition-shadow';
+          section.dataset.contentTs = contentTS;
+          section.dataset.contentPlain = contentPlain;
+          const header=document.createElement('div');
+          header.className='flex justify-between items-center bg-gray-50 px-4 py-3 cursor-pointer hover:bg-gray-100 transition-colors';
+          header.innerHTML=`<div class="flex items-center gap-3"><svg class="chev w-4 h-4 text-gray-500 transition-transform" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg><span class="font-medium text-sm text-gray-800">${title}</span></div>`;
+          const btnGroup=document.createElement('div');
+          const copyBtn=document.createElement('button');
+          copyBtn.className='text-blue-600 text-sm px-3 py-1 border border-blue-600 rounded hover:bg-blue-50 transition-colors'; copyBtn.textContent='Copy';
+          btnGroup.appendChild(copyBtn);header.appendChild(btnGroup);
+          const body=document.createElement('pre');
+          body.className='px-4 py-3 hidden whitespace-pre-wrap text-sm bg-white border-t';
+          body.textContent = globalShowTimestamps ? contentTS : contentPlain;
+          copyBtn.addEventListener('click',(e)=>{e.stopPropagation();navigator.clipboard.writeText(body.textContent);copyBtn.textContent='Copied!';setTimeout(()=>copyBtn.textContent='Copy',1500);});
+          header.addEventListener('click',()=>{body.classList.toggle('hidden');header.querySelector('.chev').classList.toggle('rotate-90');});
+          section.appendChild(header);section.appendChild(body);
+          return section;
+        }
+
+        function addToSession(root, baseName, ts, plain){
+          let entry=sessionItems.find(e=>e.root===root);
+          if(!entry){entry={root,files:[]};sessionItems.push(entry);}
+          entry.files.push({path:`timestamped/${baseName}.txt`,content:ts});
+          entry.files.push({path:`plain/${baseName}.txt`,content:plain});
+          setEnabled(downloadBtn,true);
+        }
+      </script>
+    </div>
+  </body>
+</html>
